@@ -34,30 +34,59 @@ class Si7021:
     USR_VDDS = 64
     USR_HTRE = 4
     USR_RES0 = 1
-    def __init__(self, bus):
+    def __init__(self, bus, hold_master_mode=True):
         self.bus = bus
         self.addr = 0x40
+        self.hold_master_mode = hold_master_mode
 
     def reset(self):
         """ Reset the sensor """
         self.bus.write_byte(self.addr, self.RESET)
+
+    @property
+    def relative_humidity(self):
+        if self.hold_master_mode:
+            rh = self.bus.read_word_data(self.addr, self.RH_HOLD)
+
+            # Swap bytes
+            rh = ((rh & 0xff) << 8) | (rh >> 8)
+        else:
+            try:
+                rh = self.bus.read_word_data(self.addr, self.RH_NO_HOLD)
+                rh = ((rh & 0xff) << 8) | (rh >> 8)
+            except OSError:
+                while True:
+                    try:
+                        data = self.bus.read(self.addr, 2)
+                        break
+                    except OSError:
+                        continue
+
+                rh = (data[0] << 8) | data[1]
+
+        rh = 125. * rh  / 65536. - 6 # See DS 5.1.1
+        rh = max(0, min(100, rh)) # See DS 5.1.1
+
+        return rh
+
+    @property
+    def temperature(self):
+        t = self.bus.read_word_data(self.addr, self.LAST_TEMPERATURE)
+
+        # Swap bytes
+        t = ((t & 0xff) << 8) | (t >> 8)
+
+        t = 175.72 * t / 65536. - 46.85 # See DS 5.1.2
+
+        return t
 
     def read(self):
         """ Read relative humidity and temperature.
 
         Returns a tuple (rh, temperature)
         """
-        rh = self.bus.read_word_data(self.addr, self.RH_HOLD)
-        t = self.bus.read_word_data(self.addr, self.LAST_TEMPERATURE)
 
-        # Swap bytes
-        rh = ((rh & 0xff) << 8) | (rh >> 8)
-        t = ((t & 0xff) << 8) | (t >> 8)
-
-        rh = 125. * rh  / 65536. - 6 # See DS 5.1.1
-        rh = max(0, min(100, rh)) # See DS 5.1.1
-        t = 175.72 * t / 65536. - 46.85 # See DS 5.1.2
-        return (rh, t)
+        return (self.relative_humidity, self.temperature)
 
     @property
     def heater_mA(self):
